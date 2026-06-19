@@ -1,5 +1,5 @@
-import { StudyApp } from "@/components/study/StudyApp";
+import { redirect } from "next/navigation";
 
 export default function Home() {
-  return <StudyApp />;
+  redirect("/agent");
 }

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Bookmark,
   BookOpen,
+  Bot,
   Code2,
   FileCode2,
   Files,
@@ -13,10 +14,14 @@ import {
   Loader2,
   NotebookPen,
   Search,
+  Send,
   Server,
+  Sparkles,
   Star,
+  Wrench,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { MarkdownContent } from "@/components/chat/MarkdownContent";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -56,6 +61,20 @@ type StudyFileContent = {
   content: string;
   size: number;
   modified: string;
+};
+
+type AgentMessage = {
+  role: "user" | "assistant";
+  content: string;
+  contextFiles?: string[];
+};
+
+type AgentStatus = {
+  ok: boolean;
+  url: string;
+  models: string[];
+  defaultModel: string;
+  error?: string;
 };
 
 const tabs = [
@@ -99,6 +118,14 @@ function firstUsefulLines(content: string) {
     .join("\n");
 }
 
+const starterAgentMessages: AgentMessage[] = [
+  {
+    role: "assistant",
+    content:
+      "Main local study agent hoon. File select karo, phir mujhse pucho: explain karo, related files dhundo, ya learning notes banao.",
+  },
+];
+
 export function StudyApp() {
   const [activeTab, setActiveTab] = useState<TabId>("overview");
   const [overview, setOverview] = useState<StudyOverview>(fallbackOverview);
@@ -113,6 +140,11 @@ export function StudyApp() {
   const [bookmarks, setBookmarks] = useState<string[]>([]);
   const [notes, setNotes] = useState("");
   const [error, setError] = useState("");
+  const [agentMessages, setAgentMessages] = useState<AgentMessage[]>(starterAgentMessages);
+  const [agentInput, setAgentInput] = useState("");
+  const [agentLoading, setAgentLoading] = useState(false);
+  const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
+  const [agentModel, setAgentModel] = useState("qwen2.5-coder:7b");
 
   useEffect(() => {
     const savedBookmarks = window.localStorage.getItem("study-bookmarks");
@@ -157,6 +189,37 @@ export function StudyApp() {
   useEffect(() => {
     let isMounted = true;
 
+    async function loadAgentStatus() {
+      try {
+        const response = await fetch("/api/study/agent/status");
+        const data = (await response.json()) as AgentStatus;
+        if (isMounted) {
+          setAgentStatus(data);
+          setAgentModel(data.models[0] ?? data.defaultModel ?? "qwen2.5-coder:7b");
+        }
+      } catch {
+        if (isMounted) {
+          setAgentStatus({
+            ok: false,
+            url: "http://localhost:11434",
+            models: [],
+            defaultModel: "qwen2.5-coder:7b",
+            error: "Unable to check Ollama status.",
+          });
+        }
+      }
+    }
+
+    void loadAgentStatus();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+
     async function loadFile() {
       setFileLoading(true);
       setError("");
@@ -191,6 +254,70 @@ export function StudyApp() {
   const selectedFile = overview.files.find((file) => file.path === selectedPath);
   const isBookmarked = bookmarks.includes(selectedPath);
   const codeLines = fileContent?.content.split(/\r?\n/) ?? [];
+
+  async function sendAgentMessage(content: string) {
+    const trimmed = content.trim();
+    if (!trimmed || agentLoading) return;
+
+    const nextMessages: AgentMessage[] = [
+      ...agentMessages,
+      {
+        role: "user",
+        content: trimmed,
+      },
+    ];
+
+    setAgentMessages(nextMessages);
+    setAgentInput("");
+    setAgentLoading(true);
+    setError("");
+
+    try {
+      const response = await fetch("/api/study/agent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: nextMessages.filter((message) => message.role === "user" || message.role === "assistant"),
+          selectedPath,
+          notes,
+          model: agentModel,
+        }),
+      });
+      const data = (await response.json()) as {
+        message?: string;
+        error?: string;
+        contextFiles?: string[];
+        model?: string;
+      };
+
+      if (!response.ok || data.error) {
+        throw new Error(data.error ?? "Local agent failed.");
+      }
+
+      setAgentMessages((current) => [
+        ...current,
+        {
+          role: "assistant",
+          content: data.message ?? "No response from local model.",
+          contextFiles: data.contextFiles,
+        },
+      ]);
+      if (data.model) setAgentModel(data.model);
+    } catch (agentError) {
+      setAgentMessages((current) => [
+        ...current,
+        {
+          role: "assistant",
+          content:
+            agentError instanceof Error
+              ? `**Agent offline.** ${agentError.message}`
+              : "**Agent offline.** Unable to reach local model.",
+        },
+      ]);
+    } finally {
+      setAgentLoading(false);
+    }
+  }
 
   async function runSearch(nextQuery = query) {
     const trimmed = nextQuery.trim();
@@ -303,7 +430,7 @@ export function StudyApp() {
             </div>
           )}
 
-          <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,480px)_minmax(0,1fr)]">
+          <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,420px)_minmax(0,1fr)] 2xl:grid-cols-[minmax(0,420px)_minmax(0,1fr)_minmax(360px,420px)]">
             <section className="min-h-[440px] border-b border-surface-800 p-4 lg:border-b-0 lg:border-r">
               {activeTab === "overview" && (
                 <OverviewPanel overview={overview} loading={overviewLoading} chooseFile={chooseFile} />
@@ -374,10 +501,193 @@ export function StudyApp() {
                 </div>
               )}
             </section>
+
+            <AgentPanel
+              selectedPath={selectedPath}
+              fileContent={fileContent}
+              status={agentStatus}
+              model={agentModel}
+              setModel={setAgentModel}
+              messages={agentMessages}
+              input={agentInput}
+              setInput={setAgentInput}
+              loading={agentLoading}
+              sendMessage={sendAgentMessage}
+            />
           </div>
         </section>
       </div>
     </main>
+  );
+}
+
+function AgentPanel({
+  selectedPath,
+  fileContent,
+  status,
+  model,
+  setModel,
+  messages,
+  input,
+  setInput,
+  loading,
+  sendMessage,
+}: {
+  selectedPath: string;
+  fileContent: StudyFileContent | null;
+  status: AgentStatus | null;
+  model: string;
+  setModel: (value: string) => void;
+  messages: AgentMessage[];
+  input: string;
+  setInput: (value: string) => void;
+  loading: boolean;
+  sendMessage: (content: string) => Promise<void>;
+}) {
+  const quickPrompts = [
+    "Is selected file ko simple Hinglish me explain karo.",
+    "Is file ke related important files aur flow batao.",
+    "Mere liye is topic ka 5-step learning plan banao.",
+    "Is file se quiz banao with answers.",
+  ];
+
+  return (
+    <aside className="flex min-h-[540px] flex-col border-t border-surface-800 bg-surface-950 2xl:border-l 2xl:border-t-0">
+      <div className="border-b border-surface-800 p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <div className="flex h-8 w-8 items-center justify-center rounded-md border border-cyan-400/30 bg-cyan-400/10 text-cyan-200">
+                <Bot size={17} aria-hidden="true" />
+              </div>
+              <div>
+                <h3 className="text-sm font-semibold text-surface-100">Local AI Agent</h3>
+                <p className="text-xs text-surface-500">Ollama powered, read-only</p>
+              </div>
+            </div>
+          </div>
+          <span
+            className={cn(
+              "rounded-md border px-2 py-1 text-xs",
+              status?.ok
+                ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-200"
+                : "border-amber-400/30 bg-amber-400/10 text-amber-200",
+            )}
+          >
+            {status?.ok ? "Online" : "Setup needed"}
+          </span>
+        </div>
+
+        {!status?.ok && (
+          <div className="mt-3 rounded-md border border-amber-400/30 bg-amber-400/10 p-3 text-xs text-amber-100">
+            <div className="font-medium">Ollama start karo:</div>
+            <code className="mt-2 block whitespace-pre-wrap rounded bg-surface-950 p-2 font-mono text-[11px] text-surface-200">
+              ollama serve{"\n"}ollama pull qwen2.5-coder:7b
+            </code>
+          </div>
+        )}
+
+        <div className="mt-3 grid gap-2">
+          <label className="text-xs font-medium text-surface-400" htmlFor="agent-model">
+            Model
+          </label>
+          <input
+            id="agent-model"
+            value={model}
+            onChange={(event) => setModel(event.target.value)}
+            className="h-9 rounded-md border border-surface-800 bg-surface-900 px-3 font-mono text-xs text-surface-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500"
+          />
+        </div>
+
+        <div className="mt-3 rounded-md border border-surface-800 bg-surface-900 p-3">
+          <div className="mb-2 flex items-center gap-2 text-xs font-medium text-surface-300">
+            <Wrench size={14} aria-hidden="true" />
+            Agent tools
+          </div>
+          <div className="flex flex-wrap gap-2 text-xs text-surface-400">
+            <span className="rounded bg-surface-800 px-2 py-1">read file</span>
+            <span className="rounded bg-surface-800 px-2 py-1">repo search</span>
+            <span className="rounded bg-surface-800 px-2 py-1">learning plan</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-2 border-b border-surface-800 p-3">
+        {quickPrompts.map((prompt) => (
+          <button
+            key={prompt}
+            type="button"
+            disabled={loading}
+            onClick={() => void sendMessage(prompt)}
+            className="flex items-center gap-2 rounded-md border border-surface-800 bg-surface-900 px-3 py-2 text-left text-xs text-surface-300 hover:border-surface-700 hover:bg-surface-800 disabled:opacity-50"
+          >
+            <Sparkles size={13} className="text-cyan-300" aria-hidden="true" />
+            <span className="min-w-0 truncate">{prompt}</span>
+          </button>
+        ))}
+      </div>
+
+      <div className="min-h-0 flex-1 space-y-3 overflow-auto p-4">
+        {messages.map((message, index) => (
+          <div
+            key={`${message.role}-${index}`}
+            className={cn(
+              "rounded-md border p-3",
+              message.role === "user"
+                ? "ml-6 border-cyan-400/30 bg-cyan-400/10"
+                : "mr-6 border-surface-800 bg-surface-900",
+            )}
+          >
+            <div className="mb-2 text-xs font-medium text-surface-400">
+              {message.role === "user" ? "You" : "Agent"}
+            </div>
+            <MarkdownContent content={message.content} className="text-sm" />
+            {message.contextFiles?.length ? (
+              <div className="mt-3 border-t border-surface-800 pt-2">
+                <div className="mb-1 text-xs text-surface-500">Context used</div>
+                <div className="space-y-1">
+                  {message.contextFiles.slice(0, 5).map((filePath) => (
+                    <div key={filePath} className="truncate font-mono text-[11px] text-cyan-200">
+                      {filePath}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ))}
+        {loading && (
+          <div className="mr-6 flex items-center gap-2 rounded-md border border-surface-800 bg-surface-900 p-3 text-sm text-surface-400">
+            <Loader2 className="animate-spin" size={16} aria-hidden="true" />
+            Agent is thinking
+          </div>
+        )}
+      </div>
+
+      <form
+        className="border-t border-surface-800 p-3"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void sendMessage(input);
+        }}
+      >
+        <div className="mb-2 flex items-center justify-between gap-3 text-xs text-surface-500">
+          <span className="min-w-0 truncate">Reading: {fileContent?.path ?? selectedPath}</span>
+          <span>{fileContent ? formatBytes(fileContent.size) : "no file"}</span>
+        </div>
+        <div className="flex gap-2">
+          <input
+            value={input}
+            onChange={(event) => setInput(event.target.value)}
+            placeholder="Ask the local agent"
+            className="h-10 min-w-0 flex-1 rounded-md border border-surface-800 bg-surface-900 px-3 text-sm text-surface-100 placeholder:text-surface-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500"
+          />
+          <Button type="submit" variant="secondary" size="icon" loading={loading} aria-label="Send to agent">
+            <Send size={15} />
+          </Button>
+        </div>
+      </form>
+    </aside>
   );
 }
 

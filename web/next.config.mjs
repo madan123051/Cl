@@ -22,14 +22,19 @@ const nextConfig = {
     minimumCacheTTL: 60,
   },
   async headers() {
+    const staticCacheValue =
+      process.env.NODE_ENV === "development"
+        ? "no-store"
+        : "public, max-age=31536000, immutable";
+
     return [
       {
         source: "/_next/static/:path*",
-        headers: [{ key: "Cache-Control", value: "public, max-age=31536000, immutable" }],
+        headers: [{ key: "Cache-Control", value: staticCacheValue }],
       },
       {
         source: "/fonts/:path*",
-        headers: [{ key: "Cache-Control", value: "public, max-age=31536000, immutable" }],
+        headers: [{ key: "Cache-Control", value: staticCacheValue }],
       },
     ];
   },
