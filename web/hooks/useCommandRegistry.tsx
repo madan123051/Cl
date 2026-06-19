@@ -16,7 +16,7 @@ const RECENT_KEY = "claude-code-recent-commands";
 interface CommandRegistryContextValue {
   /** Live list of all registered commands for UI rendering */
   commands: Command[];
-  /** Ref always pointing to the latest commands list — use in event handlers */
+  /** Ref always pointing to the latest commands list - use in event handlers */
   commandsRef: React.MutableRefObject<Command[]>;
   registerCommand: (cmd: Command) => () => void;
   /** Run a command by id and record it as recently used */
@@ -59,7 +59,7 @@ export function CommandRegistryProvider({
   const [recentCommandIds, setRecentCommandIds] = useState<string[]>(() => {
     if (typeof window === "undefined") return [];
     try {
-      return JSON.parse(localStorage.getItem(RECENT_KEY) ?? "[]");
+      return JSON.parse(localStorage.getItem(RECENT_KEY) ?? "[]") as string[];
     } catch {
       return [];
     }
@@ -98,7 +98,7 @@ export function CommandRegistryProvider({
       addToRecent(id);
       cmd.action();
     },
-    [addToRecent]
+    [addToRecent],
   );
 
   const openPalette = useCallback(() => setPaletteOpen(true), []);
@@ -106,7 +106,6 @@ export function CommandRegistryProvider({
   const openHelp = useCallback(() => setHelpOpen(true), []);
   const closeHelp = useCallback(() => setHelpOpen(false), []);
 
-  // Keep commandsRef in sync when state updates
   useEffect(() => {
     commandsRef.current = commands;
   }, [commands]);
